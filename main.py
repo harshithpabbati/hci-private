@@ -26,7 +26,12 @@ from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 
 # Audio configuration
-pygame.mixer.init()
+try:
+    pygame.mixer.init()
+except pygame.error as e:
+    print(f"Warning: Audio system initialization failed: {e}")
+    print("The application will run without sound alerts.\n")
+    
 sound = None
 
 # Display constants

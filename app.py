@@ -34,7 +34,12 @@ pose_model = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=
 mp_drawing = mp.solutions.drawing_utils
 
 # Initialize audio system
-pygame.mixer.init()
+try:
+    pygame.mixer.init()
+except pygame.error as e:
+    print(f"Warning: Audio system initialization failed: {e}")
+    print("The application will run without sound alerts.\n")
+
 sound = None
 
 # Screenshot directory configuration
