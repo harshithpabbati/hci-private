@@ -1,4 +1,17 @@
-# WITHOUT SS
+"""
+Driver Drowsiness Detection System - CLI Version
+
+This module provides a command-line interface for real-time driver drowsiness
+and distraction detection using computer vision and MediaPipe face mesh.
+
+Features:
+- Eye Aspect Ratio (EAR) monitoring for drowsiness detection
+- Gaze tracking to detect looking away from the road
+- Head pose estimation to detect distraction
+- Real-time visual feedback with alerts
+- Audio alarm system for critical alerts
+"""
+
 import time
 import pprint
 import pygame
@@ -8,14 +21,41 @@ import numpy as np
 
 from attention_scorer import AttentionScorer as AttScorer
 from eye_detector import EyeDetector as EyeDet
-from parser import get_args
+from arg_parser import get_args
 from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 
-pygame.mixer.init()
+# Audio configuration
+try:
+    pygame.mixer.init()
+except pygame.error as e:
+    print(f"Warning: Audio system initialization failed: {e}")
+    print("The application will run without sound alerts.\n")
+    
 sound = None
 
-def load_sound(filepath):
+# Display constants
+ALERT_FONT = cv2.FONT_HERSHEY_DUPLEX
+ALERT_FONT_SCALE = 0.7
+ALERT_FONT_THICKNESS = 2
+ALERT_COLOR = (0, 0, 255)  # Red for alerts
+
+POSE_FONT = cv2.FONT_HERSHEY_PLAIN
+POSE_FONT_SCALE = 1.5
+POSE_FONT_THICKNESS = 1
+POSE_COLOR = (0, 255, 0)  # Green for pose info
+
+
+def load_sound(filepath: str) -> pygame.mixer.Sound:
+    """
+    Load an audio file for alert notifications.
+    
+    Args:
+        filepath: Path to the audio file (MP3, WAV, OGG supported)
+        
+    Returns:
+        pygame.mixer.Sound object or None if loading fails
+    """
     try:
         return pygame.mixer.Sound(filepath)
     except pygame.error as e:
@@ -23,10 +63,18 @@ def load_sound(filepath):
         return None
 
 def main():
+    """
+    Main entry point for the driver drowsiness detection system.
+    
+    Initializes camera, detection models, and runs the main detection loop.
+    Displays real-time video feed with overlay information and triggers
+    alerts when drowsiness or distraction is detected.
+    """
     args = get_args()
     global sound
-    sound = load_sound(r'assets\alarm.mp3')
+    sound = load_sound(r'assets/alarm.mp3')
 
+    # Enable OpenCV optimization if available
     if not cv2.useOptimized():
         try:
             cv2.setUseOptimized(True)
@@ -35,11 +83,13 @@ def main():
                 f"OpenCV optimization could not be set to True, the script may be slower than expected.\nError: {e}"
             )
 
+    # Load camera calibration parameters if provided
     if args.camera_params:
         camera_matrix, dist_coeffs = load_camera_parameters(args.camera_params)
     else:
         camera_matrix, dist_coeffs = None, None
 
+    # Print configuration if verbose mode is enabled
     if args.verbose:
         print("Arguments and Parameters used:\n")
         pprint.pp(vars(args), indent=4)
@@ -49,10 +99,8 @@ def main():
         pprint.pp(dist_coeffs, indent=4)
         print("\n")
 
-    """instantiation of mediapipe face mesh model. This model give back 478 landmarks
-    if the rifine_landmarks parameter is set to True. 468 landmarks for the face and
-    the last 10 landmarks for the irises
-    """
+    # Initialize MediaPipe Face Mesh detector
+    # Returns 478 landmarks: 468 for face + 10 for irises
     Detector = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=False,
         min_detection_confidence=0.5,
@@ -60,19 +108,20 @@ def main():
         refine_landmarks=True,
     )
 
-    # instantiation of the Eye Detector and Head Pose estimator objects
+    # Initialize detection and estimation modules
     Eye_det = EyeDet(show_processing=args.show_eye_proc)
 
     Head_pose = HeadPoseEst(
         show_axis=args.show_axis, camera_matrix=camera_matrix, dist_coeffs=dist_coeffs
     )
 
-    # timing variables
+    # Initialize timing variables for FPS calculation
     prev_time = time.perf_counter()
     fps = 0.0
 
     t_now = time.perf_counter()
 
+    # Initialize attention scorer with configured thresholds
     Scorer = AttScorer(
         t_now=t_now,
         ear_thresh=args.ear_thresh,
@@ -86,61 +135,75 @@ def main():
         verbose=args.verbose,
     )
 
+    # Initialize video capture
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         print("Cannot open camera")
         exit()
 
+    print("Driver Drowsiness Detection System started.")
+    print("Press 'q' to quit.\n")
+
+    # Main detection loop
     while True:
         t_now = time.perf_counter()
 
+        # Calculate FPS
         elapsed_time = t_now - prev_time
         prev_time = t_now
 
         if elapsed_time > 0:
             fps = np.round(1 / elapsed_time, 3)
 
+        # Capture frame
         ret, frame = cap.read()
 
         if not ret:
             print("Can't receive frame from camera/stream end")
             break
 
+        # Flip frame horizontally if using webcam
         if args.camera == 0:
             frame = cv2.flip(frame, 2)
 
         e1 = cv2.getTickCount()
 
+        # Convert to grayscale and prepare for MediaPipe processing
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         frame_size = frame.shape[1], frame.shape[0]
         gray = np.expand_dims(gray, axis=2)
         gray = np.concatenate([gray, gray, gray], axis=2)
 
+        # Detect facial landmarks
         lms = Detector.process(gray).multi_face_landmarks
 
         alert_messages = []
         if lms:
             landmarks = get_landmarks(lms)
+            
+            # Draw eye keypoints on frame
             Eye_det.show_eye_keypoints(
                 color_frame=frame, landmarks=landmarks, frame_size=frame_size
             )
 
+            # Calculate Eye Aspect Ratio (EAR)
             ear = Eye_det.get_EAR(landmarks=landmarks)
 
+            # Compute PERCLOS score for tiredness detection
             tired, perclos_score = Scorer.get_rolling_PERCLOS(t_now, ear)
 
-            # compute the Gaze Score
+            # Compute Gaze Score
             gaze = Eye_det.get_Gaze_Score(
                 frame=gray, landmarks=landmarks, frame_size=frame_size
             )
 
-            # compute the head pose
+            # Compute head pose (roll, pitch, yaw)
             frame_det, roll, pitch, yaw = Head_pose.get_pose(
                 frame=frame, landmarks=landmarks, frame_size=frame_size
             )
 
-            # evaluate the scores for EAR, GAZE and HEAD POSE
+            # Evaluate all scores and determine driver state
             asleep, looking_away, distracted = Scorer.eval_scores(
                 t_now=t_now,
                 ear_score=ear,
@@ -150,47 +213,42 @@ def main():
                 head_yaw=yaw,
             )
 
-            # if the head pose estimation is successful, show the results
+            # Update frame if head pose estimation was successful
             if frame_det is not None:
                 frame = frame_det
 
-            # Collect alert messages
+            # Collect and display alert messages
             if tired:
                 alert_messages.append("TIRED!")
             if asleep:
                 alert_messages.append("ASLEEP!")
-                sound.play(loops=0)
+                if sound:
+                    sound.play(loops=0)
             if looking_away:
                 alert_messages.append("LOOKING AWAY!")
-                sound.play(loops=0)
+                if sound:
+                    sound.play(loops=0)
             if distracted:
                 alert_messages.append("DISTRACTED!")
-                sound.play(loops=0)
+                if sound:
+                    sound.play(loops=0)
 
-            # Display alert messages on the top left in bold red
-            font = cv2.FONT_HERSHEY_DUPLEX
-            font_scale = 0.7
-            font_thickness = 2
-            text_color_alert = (0, 0, 255)  # Red
+            # Display alert messages at top left in red
             y_position = 30
             for message in alert_messages:
                 cv2.putText(
                     frame,
                     message,
                     (10, y_position),
-                    font,
-                    font_scale,
-                    text_color_alert,
-                    font_thickness,
+                    ALERT_FONT,
+                    ALERT_FONT_SCALE,
+                    ALERT_COLOR,
+                    ALERT_FONT_THICKNESS,
                     cv2.LINE_AA,
                 )
                 y_position += 30
 
-            # Display roll, pitch, yaw
-            font_pose = cv2.FONT_HERSHEY_PLAIN
-            font_scale_pose = 1.5
-            font_thickness_pose = 1
-            text_color_pose = (0, 255, 0)  # Green
+            # Display head pose angles at top right in green
             x_position_pose = frame.shape[1] - 150
             y_position_pose = 40
             if roll is not None:
@@ -198,10 +256,10 @@ def main():
                     frame,
                     f"Roll:{roll.round(1)[0]}",
                     (x_position_pose, y_position_pose),
-                    font_pose,
-                    font_scale_pose,
-                    text_color_pose,
-                    font_thickness_pose,
+                    POSE_FONT,
+                    POSE_FONT_SCALE,
+                    POSE_COLOR,
+                    POSE_FONT_THICKNESS,
                     cv2.LINE_AA,
                 )
                 y_position_pose += 30
@@ -210,10 +268,10 @@ def main():
                     frame,
                     f"Pitch:{pitch.round(1)[0]}",
                     (x_position_pose, y_position_pose),
-                    font_pose,
-                    font_scale_pose,
-                    text_color_pose,
-                    font_thickness_pose,
+                    POSE_FONT,
+                    POSE_FONT_SCALE,
+                    POSE_COLOR,
+                    POSE_FONT_THICKNESS,
                     cv2.LINE_AA,
                 )
                 y_position_pose += 30
@@ -222,23 +280,24 @@ def main():
                     frame,
                     f"Yaw:{yaw.round(1)[0]}",
                     (x_position_pose, y_position_pose),
-                    font_pose,
-                    font_scale_pose,
-                    text_color_pose,
-                    font_thickness_pose,
+                    POSE_FONT,
+                    POSE_FONT_SCALE,
+                    POSE_COLOR,
+                    POSE_FONT_THICKNESS,
                     cv2.LINE_AA,
                 )
 
         e2 = cv2.getTickCount()
         proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
 
-        # show the frame on screen
-        cv2.imshow("Press 'q' to terminate", frame)
+        # Display the frame
+        cv2.imshow("Driver Drowsiness Detection - Press 'q' to quit", frame)
 
-        # if the key "q" is pressed on the keyboard, the program is terminated
+        # Check for quit command
         if cv2.waitKey(20) & 0xFF == ord("q"):
             break
 
+    # Cleanup
     cap.release()
     cv2.destroyAllWindows()
 
