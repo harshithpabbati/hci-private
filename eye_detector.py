@@ -1,10 +1,41 @@
+"""
+Eye Detection Module
+
+This module provides eye detection and analysis functionality for drowsiness detection.
+It calculates Eye Aspect Ratio (EAR) and gaze deviation using facial landmarks.
+
+Classes:
+    EyeDetector: Main class for eye detection and analysis
+"""
+
 import cv2
 import numpy as np
 from numpy import linalg as LA
 from utils import resize
 
+
 class EyeDetector:
+    """
+    Eye detector for calculating Eye Aspect Ratio (EAR) and gaze direction.
+    
+    This class uses MediaPipe facial landmarks to detect eye closure and
+    gaze direction. It can also visualize eye regions for debugging.
+    
+    Attributes:
+        show_processing (bool): Enable visualization of eye processing
+        FACE_CONNECTIONS (dict): Facial landmark groups for visualization
+        LEFT_IRIS_NUM (int): Landmark index for left iris
+        RIGHT_IRIS_NUM (int): Landmark index for right iris
+        EYES_LMS_NUMS (list): Landmark indices for eye corners
+    """
+    
     def __init__(self, show_processing: bool = False):
+        """
+        Initialize the eye detector.
+        
+        Args:
+            show_processing: Enable visualization of eye processing windows
+        """
         self.show_processing = show_processing
 
         # Landmark groups for line connections
@@ -13,7 +44,6 @@ class EyeDetector:
             "right_eye": [362, 385, 387, 263, 373, 380, 362],
             "left_eyebrow": [70, 63, 105, 66, 107],
             "right_eyebrow": [336, 296, 334, 293, 300],
-            # "jawline": [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288],
             "nose_bridge": [168, 6, 197, 195, 5],
             "outer_lips": [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 61]
         }
@@ -24,12 +54,33 @@ class EyeDetector:
         self.EYES_LMS_NUMS = [33, 133, 160, 144, 158, 153, 362, 263, 385, 380, 387, 373]
 
     @staticmethod
-    def _calc_EAR_eye(eye_pts):
+    def _calc_EAR_eye(eye_pts: np.ndarray) -> float:
+        """
+        Calculate Eye Aspect Ratio for a single eye.
+        
+        EAR formula: (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+        where p1-p6 are eye corner and eyelid landmarks.
+        
+        Args:
+            eye_pts: Array of 6 eye landmark points
+            
+        Returns:
+            Eye Aspect Ratio value
+        """
         return (
             LA.norm(eye_pts[2] - eye_pts[3]) + LA.norm(eye_pts[4] - eye_pts[5])
         ) / (2 * LA.norm(eye_pts[0] - eye_pts[1]))
 
-    def show_eye_keypoints(self, color_frame, landmarks, frame_size):
+    def show_eye_keypoints(self, color_frame: np.ndarray, landmarks: np.ndarray, 
+                          frame_size: tuple):
+        """
+        Draw eye and facial landmarks on the frame.
+        
+        Args:
+            color_frame: BGR color frame to draw on
+            landmarks: Facial landmark coordinates (normalized)
+            frame_size: Tuple of (width, height)
+        """
         # Draw iris (white dot)
         for iris_idx in [self.LEFT_IRIS_NUM, self.RIGHT_IRIS_NUM]:
             cv2.circle(
@@ -45,7 +96,16 @@ class EyeDetector:
                 pt2 = (landmarks[indices[i+1], :2] * frame_size).astype(int)
                 cv2.line(color_frame, pt1, pt2, (0, 0, 255), 1)
 
-    def get_EAR(self, landmarks):
+    def get_EAR(self, landmarks: np.ndarray) -> float:
+        """
+        Calculate average Eye Aspect Ratio for both eyes.
+        
+        Args:
+            landmarks: Facial landmark coordinates (normalized)
+            
+        Returns:
+            Average EAR value for both eyes
+        """
         eye_pts_l = np.zeros((6, 2))
         eye_pts_r = np.zeros((6, 2))
 
@@ -58,7 +118,22 @@ class EyeDetector:
         return (ear_left + ear_right) / 2
 
     @staticmethod
-    def _calc_1eye_score(landmarks, eye_lms_nums, eye_iris_num, frame_size, frame):
+    def _calc_1eye_score(landmarks: np.ndarray, eye_lms_nums: list, 
+                        eye_iris_num: int, frame_size: tuple, 
+                        frame: np.ndarray) -> tuple:
+        """
+        Calculate gaze score for a single eye.
+        
+        Args:
+            landmarks: Facial landmark coordinates (normalized)
+            eye_lms_nums: Landmark indices for eye corners
+            eye_iris_num: Landmark index for iris center
+            frame_size: Tuple of (width, height)
+            frame: BGR image frame
+            
+        Returns:
+            Tuple of (gaze_score, eye_region_image)
+        """
         iris = landmarks[eye_iris_num, :2]
         eye_x_min = landmarks[eye_lms_nums, 0].min()
         eye_y_min = landmarks[eye_lms_nums, 1].min()
@@ -76,7 +151,22 @@ class EyeDetector:
 
         return gaze_score, eye
 
-    def get_Gaze_Score(self, frame, landmarks, frame_size):
+    def get_Gaze_Score(self, frame: np.ndarray, landmarks: np.ndarray, 
+                      frame_size: tuple) -> float:
+        """
+        Calculate average gaze score for both eyes.
+        
+        Gaze score measures how far the iris is from the center of the eye.
+        Higher values indicate looking away from center.
+        
+        Args:
+            frame: BGR image frame
+            landmarks: Facial landmark coordinates (normalized)
+            frame_size: Tuple of (width, height)
+            
+        Returns:
+            Average gaze deviation score
+        """
         left_gaze_score, left_eye = self._calc_1eye_score(
             landmarks, self.EYES_LMS_NUMS[:6], self.LEFT_IRIS_NUM, frame_size, frame
         )
