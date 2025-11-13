@@ -7,6 +7,9 @@ Features multi-view monitoring, alert history, and interactive controls.
 Features:
 - Front View: Face and eye analysis with drowsiness detection
 - Side View: Posture monitoring and classification
+- Crash Detection: Motion-based crash detection using optical flow
+- Yawn Detection: Fatigue monitoring through yawn detection
+- Blink Rate Monitoring: Abnormal blink pattern detection
 - Alerts Gallery: Historical view of captured alert events
 - Real-time FPS counter and metrics display
 - Screenshot capture for alert events
@@ -27,6 +30,9 @@ from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 from arg_parser import get_args
 from posture import classify_posture
+from crash_detector import CrashDetector
+from yawn_detector import YawnDetector
+from blink_rate_monitor import BlinkRateMonitor
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
@@ -179,10 +185,13 @@ st.sidebar.markdown("""
     <p>Real-time AI-powered driver safety monitoring system.</p>
     <p><b>Features:</b></p>
     <ul>
-        <li>Drowsiness Detection</li>
-        <li>Distraction Alert</li>
-        <li>Posture Monitoring</li>
-        <li>Auto Screenshot</li>
+        <li>👁️ Drowsiness Detection</li>
+        <li>🎯 Distraction Alert</li>
+        <li>🥱 Yawn Detection</li>
+        <li>👀 Blink Rate Monitoring</li>
+        <li>💥 Crash Detection</li>
+        <li>🧍 Posture Monitoring</li>
+        <li>📸 Auto Screenshot</li>
     </ul>
 </div>
 """, unsafe_allow_html=True)
@@ -295,9 +304,10 @@ def draw_pupil_centers(frame: np.ndarray, landmarks: np.ndarray, frame_size: tup
     cv2.circle(frame, right_center, 3, (255, 0, 255), -1)
 
 
-def process_frame(frame: np.ndarray, detector, eye_det, head_pose, scorer, frame_size: tuple):
+def process_frame(frame: np.ndarray, detector, eye_det, head_pose, scorer, 
+                  frame_size: tuple, yawn_det=None, blink_monitor=None, crash_det=None, t_now=None):
     """
-    Process a single frame for drowsiness detection.
+    Process a single frame for drowsiness detection with advanced features.
     
     Args:
         frame: BGR image array
@@ -306,15 +316,24 @@ def process_frame(frame: np.ndarray, detector, eye_det, head_pose, scorer, frame
         head_pose: Head pose estimator instance
         scorer: Attention scorer instance
         frame_size: Tuple of (width, height)
+        yawn_det: Optional yawn detector instance
+        blink_monitor: Optional blink rate monitor instance
+        crash_det: Optional crash detector instance
+        t_now: Current timestamp
         
     Returns:
-        Tuple of (processed_frame, list_of_alerts)
+        Tuple of (processed_frame, list_of_alerts, dict_of_metrics)
     """
     alerts = []
+    metrics = {}
+    
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = np.repeat(gray[..., np.newaxis], 3, axis=-1)
     lms = detector.process(gray).multi_face_landmarks
     roll = pitch = yaw = None
+    
+    if t_now is None:
+        t_now = time.perf_counter()
     
     if lms:
         landmarks = get_landmarks(lms)
@@ -322,17 +341,32 @@ def process_frame(frame: np.ndarray, detector, eye_det, head_pose, scorer, frame
         draw_pupil_centers(frame, landmarks, frame_size)
         
         ear = eye_det.get_EAR(landmarks)
-        tired, _ = scorer.get_rolling_PERCLOS(time.perf_counter(), ear)
+        tired, _ = scorer.get_rolling_PERCLOS(t_now, ear)
         gaze = eye_det.get_Gaze_Score(frame, landmarks, frame_size)
         _, roll, pitch, yaw = head_pose.get_pose(frame, landmarks, frame_size)
         asleep, look_away, distracted = scorer.eval_scores(
-            time.perf_counter(), ear, gaze, roll, pitch, yaw
+            t_now, ear, gaze, roll, pitch, yaw
         )
+        
+        # Check yawning
+        is_yawning = False
+        yawn_count = 0
+        if yawn_det is not None:
+            is_yawning, mar, yawn_count = yawn_det.detect_yawn(landmarks, t_now)
+            metrics['yawn_count'] = yawn_count
+        
+        # Check blink rate
+        blink_rate = 0.0
+        abnormal_blink = False
+        if blink_monitor is not None:
+            blink_rate, abnormal_blink, total_blinks = blink_monitor.update(ear, t_now)
+            metrics['blink_rate'] = blink_rate
+            metrics['total_blinks'] = total_blinks
         
         # Collect alerts
         for flag, label in zip(
-            [tired, asleep, look_away, distracted],
-            ["DROWSY", "ASLEEP", "LOOK AWAY", "DISTRACTED"]
+            [tired, asleep, look_away, distracted, is_yawning, abnormal_blink],
+            ["DROWSY", "ASLEEP", "LOOK AWAY", "DISTRACTED", "YAWNING", "ABNORMAL BLINK"]
         ):
             if flag:
                 alerts.append(label)
@@ -350,11 +384,21 @@ def process_frame(frame: np.ndarray, detector, eye_det, head_pose, scorer, frame
             cv2.putText(frame, f"Yaw: {yaw[0]:.1f}°", (10, frame_size[1] - 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
     
-    return frame, alerts
+    # Run crash detection (works regardless of face detection)
+    if crash_det is not None:
+        crash_detected, motion_mag, frame = crash_det.detect_crash(frame, t_now)
+        metrics['motion'] = motion_mag
+        if crash_detected:
+            alerts.append("CRASH DETECTED")
+            play_alert()
+            capture_screenshot("CRASH")
+    
+    return frame, alerts, metrics
 
-def dashboard(detector, eye_det, head_pose, scorer, args):
+
+def dashboard(detector, eye_det, head_pose, scorer, args, yawn_det=None, blink_monitor=None, crash_det=None):
     """
-    Front view dashboard for face and drowsiness monitoring.
+    Front view dashboard for face and drowsiness monitoring with advanced features.
     
     Args:
         detector: MediaPipe face mesh detector
@@ -362,9 +406,12 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
         head_pose: Head pose estimator instance
         scorer: Attention scorer instance
         args: Command-line arguments
+        yawn_det: Optional yawn detector instance
+        blink_monitor: Optional blink rate monitor instance
+        crash_det: Optional crash detector instance
     """
     st.markdown(
-        "<div class='block-header'>🧠 Front View - Drowsiness Detection</div>",
+        "<div class='block-header'>🧠 Advanced Driver Monitoring</div>",
         unsafe_allow_html=True
     )
     
@@ -376,7 +423,8 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
     with col2:
         stop_button = st.button("⏹️ Stop Camera", use_container_width=True)
     with col3:
-        st.markdown("<div class='info-box'>👁️ Monitoring: Eyes, Gaze, Head Pose</div>", unsafe_allow_html=True)
+        features_text = "👁️ Eyes • 🥱 Yawn • 👀 Blink • 💥 Crash • 🎯 Pose"
+        st.markdown(f"<div class='info-box'>{features_text}</div>", unsafe_allow_html=True)
     
     # Status and video placeholders
     status_placeholder = st.empty()
@@ -403,6 +451,10 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
 
     if cap and cap.isOpened():
         frame_count = 0
+        display_frame_count = 0
+        last_display_time = time.time()
+        display_interval = 0.1  # Update display every 100ms (10 FPS max for display)
+        
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -413,8 +465,13 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
             frame = cv2.resize(frame, (640, 480))
             frame_size = frame.shape[1], frame.shape[0]
             
-            # Process frame
-            processed, messages = process_frame(frame, detector, eye_det, head_pose, scorer, frame_size)
+            t_now = time.time()
+            
+            # Process frame with all features (process every frame)
+            processed, messages, metrics = process_frame(
+                frame, detector, eye_det, head_pose, scorer, frame_size,
+                yawn_det=yawn_det, blink_monitor=blink_monitor, crash_det=crash_det, t_now=t_now
+            )
             
             # Display alerts on frame
             y_offset = 40
@@ -423,7 +480,7 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
                            cv2.FONT_HERSHEY_DUPLEX, 1.2, (0, 0, 255), 3)
                 y_offset += 40
             
-            # Calculate FPS
+            # Calculate FPS (based on actual processing)
             curr_time = time.time()
             fps = 1 / (curr_time - prev_time) if (curr_time - prev_time) > 0 else 0
             prev_time = curr_time
@@ -432,28 +489,43 @@ def dashboard(detector, eye_det, head_pose, scorer, args):
             cv2.putText(processed, f"FPS: {fps:.1f}", (10, frame_size[1] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
-            # Display metrics
-            with metrics_placeholder.container():
-                met1, met2, met3 = st.columns(3)
-                with met1:
-                    st.metric("📊 FPS", f"{fps:.1f}")
-                with met2:
-                    st.metric("🖼️ Frames", frame_count)
-                with met3:
-                    st.metric("⚠️ Alerts", len(messages))
-            
-            # Display video
-            video_placeholder.image(processed, channels="BGR", use_container_width=True)
-            
-            # Display alert messages
-            if messages:
-                alert_html = "<div class='alert-message'>🚨 " + " | ".join(messages) + "</div>"
-                alert_placeholder.markdown(alert_html, unsafe_allow_html=True)
-            else:
-                alert_placeholder.markdown(
-                    "<div class='success-message'>✅ All Clear - Driver Alert</div>",
-                    unsafe_allow_html=True
-                )
+            # Only update display at throttled rate to avoid overwhelming Streamlit
+            if (curr_time - last_display_time) >= display_interval:
+                # Display metrics
+                with metrics_placeholder.container():
+                    met1, met2, met3, met4, met5 = st.columns(5)
+                    with met1:
+                        st.metric("📊 FPS", f"{fps:.1f}")
+                    with met2:
+                        st.metric("🖼️ Processed", frame_count)
+                    with met3:
+                        st.metric("⚠️ Alerts", len(messages))
+                    with met4:
+                        if 'yawn_count' in metrics:
+                            st.metric("🥱 Yawns", metrics['yawn_count'])
+                        else:
+                            st.metric("🥱 Yawns", "N/A")
+                    with met5:
+                        if 'blink_rate' in metrics and metrics['blink_rate'] > 0:
+                            st.metric("👀 Blink/min", f"{metrics['blink_rate']:.1f}")
+                        else:
+                            st.metric("👀 Blink/min", "N/A")
+                
+                # Display video (throttled)
+                video_placeholder.image(processed, channels="BGR", use_container_width=True)
+                
+                # Display alert messages
+                if messages:
+                    alert_html = "<div class='alert-message'>🚨 " + " | ".join(messages) + "</div>"
+                    alert_placeholder.markdown(alert_html, unsafe_allow_html=True)
+                else:
+                    alert_placeholder.markdown(
+                        "<div class='success-message'>✅ All Clear - Driver Alert</div>",
+                        unsafe_allow_html=True
+                    )
+                
+                last_display_time = curr_time
+                display_frame_count += 1
             
             frame_count += 1
             time.sleep(0.01)  # Small delay to prevent overwhelming the UI
@@ -496,6 +568,9 @@ def side_posture_monitor():
         return
 
     if cap and cap.isOpened():
+        last_display_time = time.time()
+        display_interval = 0.1  # Update display every 100ms (10 FPS max)
+        
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -520,19 +595,24 @@ def side_posture_monitor():
             cv2.putText(frame, posture, (20, 60),
                        cv2.FONT_HERSHEY_DUPLEX, 1.2, color, 3)
             
-            video_placeholder.image(frame, channels="BGR", use_container_width=True)
-            
-            # Show posture status
-            if "Right" in posture:
-                posture_status.markdown(
-                    "<div class='success-message'>✅ " + posture + "</div>",
-                    unsafe_allow_html=True
-                )
-            else:
-                posture_status.markdown(
-                    "<div class='alert-message'>⚠️ " + posture + "</div>",
-                    unsafe_allow_html=True
-                )
+            # Only update display at throttled rate
+            curr_time = time.time()
+            if (curr_time - last_display_time) >= display_interval:
+                video_placeholder.image(frame, channels="BGR", use_container_width=True)
+                
+                # Show posture status
+                if "Right" in posture:
+                    posture_status.markdown(
+                        "<div class='success-message'>✅ " + posture + "</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    posture_status.markdown(
+                        "<div class='alert-message'>⚠️ " + posture + "</div>",
+                        unsafe_allow_html=True
+                    )
+                
+                last_display_time = curr_time
             
             time.sleep(0.01)
 
@@ -653,9 +733,32 @@ def main():
         verbose=getattr(args, 'verbose', False)
     )
     
+    # Initialize additional feature detectors
+    yawn_det = None
+    blink_monitor = None
+    crash_det = None
+    
+    if getattr(args, 'enable_yawn_detection', True):
+        yawn_det = YawnDetector(
+            mar_thresh=getattr(args, 'yawn_thresh', 0.6),
+            verbose=getattr(args, 'verbose', False)
+        )
+    
+    if getattr(args, 'enable_blink_rate', True):
+        blink_monitor = BlinkRateMonitor(
+            ear_blink_thresh=args.ear_thresh,
+            verbose=getattr(args, 'verbose', False)
+        )
+    
+    if getattr(args, 'enable_crash_detection', True):
+        crash_det = CrashDetector(
+            motion_threshold=getattr(args, 'crash_motion_thresh', 15.0),
+            verbose=getattr(args, 'verbose', False)
+        )
+    
     # Route to appropriate page based on menu selection
     if menu == "🎥 Front View (Face)":
-        dashboard(detector, eye_det, head_pose, scorer, args)
+        dashboard(detector, eye_det, head_pose, scorer, args, yawn_det, blink_monitor, crash_det)
     elif menu == "🧍 Side View (Posture)":
         side_posture_monitor()
     elif menu == "📸 Alerts Gallery":

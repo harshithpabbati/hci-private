@@ -30,12 +30,28 @@ A real-time AI-powered driver safety monitoring system that detects drowsiness, 
 - **Gaze Tracking**: Detects when driver is looking away from the road
 - **Iris Landmark Detection**: Precise pupil tracking for accurate gaze estimation
 - **Real-time Eye Processing**: Optional visualization of eye region analysis
+- **Blink Rate Monitoring**: Tracks blink frequency to detect abnormal patterns indicating fatigue
+  - Normal range: 12-25 blinks per minute
+  - Alerts on abnormally high or low rates
 
 #### **Head Pose Estimation**
 - **3D Head Orientation**: Tracks roll, pitch, and yaw angles
 - **Distraction Detection**: Identifies when the driver's head is turned away
 - **Visual Axis Display**: Optional 3D axis overlay showing head orientation
 - **Camera Calibration Support**: Uses custom camera parameters for improved accuracy
+
+#### **Fatigue Detection**
+- **Yawn Detection**: Monitors mouth opening using Mouth Aspect Ratio (MAR)
+  - Detects prolonged mouth opening (>1.5 seconds)
+  - Tracks yawn frequency for fatigue assessment
+  - Strong indicator of driver drowsiness
+
+#### **Crash Detection** 🆕
+- **Motion-based Analysis**: Uses optical flow to detect sudden deceleration
+- **Real-time Motion Tracking**: Monitors frame-to-frame movement patterns
+- **Sudden Stop Detection**: Alerts when significant motion suddenly drops to near-zero
+- **Visual Feedback**: Displays motion vectors and magnitude on screen
+- **Configurable Sensitivity**: Adjustable motion threshold for different environments
 
 #### **Posture Analysis (Side View)**
 - **Back Posture Classification**: Detects reclined or slouched positions
@@ -49,6 +65,9 @@ A real-time AI-powered driver safety monitoring system that detects drowsiness, 
   - 🔴 **ASLEEP**: Extended eye closure detected
   - 🟠 **LOOK AWAY**: Gaze diverted from road
   - 🟣 **DISTRACTED**: Head pose threshold exceeded
+  - 🥱 **YAWNING**: Prolonged mouth opening detected
+  - 👀 **ABNORMAL BLINK RATE**: Unusual blink frequency
+  - 💥 **CRASH DETECTED**: Sudden deceleration detected
 - **Audio Alarms**: Pygame-based sound alerts for critical conditions
 - **Screenshot Capture**: Automatic screenshot when alerts are triggered
 - **Alert Gallery**: Historical view of all captured alert events
@@ -178,6 +197,18 @@ python main.py --camera_params assets/camera_params.json
 python main.py --ear_thresh 0.2 --gaze_thresh 0.02 --pose_time_thresh 3.0
 ```
 
+**Enable/disable specific features:**
+```bash
+# Disable crash detection
+python main.py --enable_crash_detection False
+
+# Adjust crash detection sensitivity
+python main.py --crash_motion_thresh 20.0
+
+# Adjust yawn detection threshold
+python main.py --yawn_thresh 0.7
+```
+
 **Enable debug visualization:**
 ```bash
 python main.py --show_eye_proc True --show_axis True --verbose True
@@ -196,12 +227,16 @@ Then open your browser to `http://localhost:8501`
 - Use the sidebar to switch between Front View, Side View, and Alerts Gallery
 - Click "Start Camera" to begin monitoring
 - Click "Stop Camera" to end the session
+- Real-time metrics: FPS, frame count, alerts, yawn count, blink rate
 - Screenshots are automatically saved to `screenshots/` directory
 - View all captured alerts in the Gallery tab
+- Monitor crash detection with motion visualization
 
 ## ⚙️ Configuration
 
 ### Command-Line Arguments
+
+#### Core Detection Parameters
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -220,6 +255,16 @@ Then open your browser to `http://localhost:8501`
 | `--show_eye_proc` | bool | False | Show eye processing windows |
 | `--show_axis` | bool | True | Show head pose 3D axis |
 | `--verbose` | bool | False | Print detailed debug information |
+
+#### Advanced Features 🆕
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--enable_crash_detection` | bool | True | Enable crash detection using motion analysis |
+| `--crash_motion_thresh` | float | 15.0 | Motion change threshold for crash detection |
+| `--enable_yawn_detection` | bool | True | Enable yawn detection for fatigue monitoring |
+| `--yawn_thresh` | float | 0.6 | Mouth Aspect Ratio threshold for yawn detection |
+| `--enable_blink_rate` | bool | True | Enable blink rate monitoring |
 
 ### Camera Calibration
 
@@ -272,6 +317,9 @@ hci-private/
 ├── eye_detector.py        # Eye detection and EAR calculation
 ├── pose_estimation.py     # Head pose estimation
 ├── posture.py             # Body posture classification
+├── crash_detector.py      # 🆕 Crash detection using optical flow
+├── yawn_detector.py       # 🆕 Yawn detection for fatigue monitoring
+├── blink_rate_monitor.py  # 🆕 Blink rate monitoring
 ├── face_geometry.py       # 3D face geometry utilities
 ├── metric_landmarks.py    # Facial landmark metrics
 ├── utils.py               # Utility functions
@@ -300,6 +348,68 @@ hci-private/
 - **scipy**: Scientific computing
 
 See `requirements.txt` for complete list with version numbers.
+
+## 💡 Future Feature Suggestions
+
+While the system now includes advanced features like crash detection, yawn detection, and blink rate monitoring, here are additional features that could further enhance the driver monitoring system:
+
+### Proposed Enhancements
+
+1. **🌙 Night Mode Detection & Low-Light Warning**
+   - Detect low-light conditions using frame brightness analysis
+   - Alert driver when visibility is compromised
+   - Suggest increasing cabin lighting for better face detection
+
+2. **🛣️ Lane Departure Warning (Simulated)**
+   - Use frame boundary detection to simulate lane keeping
+   - Alert when the view shifts significantly
+   - Track camera position relative to "lane markers"
+
+3. **📱 Mobile Integration**
+   - Smartphone app for remote monitoring
+   - Send alerts to phone when dangerous behavior detected
+   - Cloud-based alert history and analytics
+
+4. **🔊 Voice Alerts**
+   - Text-to-speech warnings instead of just beeps
+   - Provide specific guidance: "Please focus on the road"
+   - Multi-language support
+
+5. **📊 Driver Behavior Analytics**
+   - Track and analyze patterns over time
+   - Generate safety reports and statistics
+   - Identify peak fatigue times
+
+6. **🎮 Gamification & Rewards**
+   - Score safe driving sessions
+   - Achievement system for alert-free trips
+   - Leaderboards for fleet management
+
+7. **🚗 OBD-II Integration**
+   - Connect to vehicle's OBD-II port for real speed data
+   - More accurate crash detection using actual deceleration
+   - Monitor vehicle diagnostics alongside driver state
+
+8. **🌡️ Environmental Monitoring**
+   - Cabin temperature tracking
+   - Humidity detection
+   - CO2 level warnings (with external sensors)
+
+9. **👥 Multi-Driver Recognition**
+   - Face recognition to identify different drivers
+   - Personalized thresholds per driver
+   - Individual safety profiles and history
+
+10. **🔔 Progressive Alerts**
+    - Escalating alert levels (subtle → loud)
+    - Smart snooze for false positives
+    - Context-aware alerting (stopped at red light vs. highway)
+
+### Implementation Difficulty
+
+- **Easy**: Night mode detection, voice alerts, progressive alerts
+- **Medium**: Lane departure simulation, analytics dashboard, gamification
+- **Hard**: OBD-II integration, mobile app, face recognition, environmental sensors
 
 ## 🤝 Contributing
 

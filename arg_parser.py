@@ -122,6 +122,43 @@ def get_args():
         help="Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds",
     )
 
+    # Additional feature parameters
+    parser.add_argument(
+        "--enable_crash_detection",
+        type=bool,
+        default=True,
+        metavar="",
+        help="Enable crash detection using motion analysis, default is True",
+    )
+    parser.add_argument(
+        "--crash_motion_thresh",
+        type=float,
+        default=15.0,
+        metavar="",
+        help="Motion change threshold for crash detection, default is 15.0",
+    )
+    parser.add_argument(
+        "--enable_yawn_detection",
+        type=bool,
+        default=True,
+        metavar="",
+        help="Enable yawn detection, default is True",
+    )
+    parser.add_argument(
+        "--yawn_thresh",
+        type=float,
+        default=0.6,
+        metavar="",
+        help="Mouth aspect ratio threshold for yawn detection, default is 0.6",
+    )
+    parser.add_argument(
+        "--enable_blink_rate",
+        type=bool,
+        default=True,
+        metavar="",
+        help="Enable blink rate monitoring, default is True",
+    )
+
     # parse the arguments and store them in the args variable dictionary
     args, _ = parser.parse_known_args()
 
