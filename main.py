@@ -8,6 +8,9 @@ Features:
 - Eye Aspect Ratio (EAR) monitoring for drowsiness detection
 - Gaze tracking to detect looking away from the road
 - Head pose estimation to detect distraction
+- Crash detection using motion analysis
+- Yawn detection for fatigue monitoring
+- Blink rate monitoring
 - Real-time visual feedback with alerts
 - Audio alarm system for critical alerts
 """
@@ -24,6 +27,9 @@ from eye_detector import EyeDetector as EyeDet
 from arg_parser import get_args
 from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
+from crash_detector import CrashDetector
+from yawn_detector import YawnDetector
+from blink_rate_monitor import BlinkRateMonitor
 
 # Audio configuration
 try:
@@ -135,6 +141,32 @@ def main():
         verbose=args.verbose,
     )
 
+    # Initialize additional feature detectors
+    crash_det = None
+    yawn_det = None
+    blink_monitor = None
+    
+    if args.enable_crash_detection:
+        crash_det = CrashDetector(
+            motion_threshold=args.crash_motion_thresh,
+            verbose=args.verbose
+        )
+        print("Crash detection enabled")
+    
+    if args.enable_yawn_detection:
+        yawn_det = YawnDetector(
+            mar_thresh=args.yawn_thresh,
+            verbose=args.verbose
+        )
+        print("Yawn detection enabled")
+    
+    if args.enable_blink_rate:
+        blink_monitor = BlinkRateMonitor(
+            ear_blink_thresh=args.ear_thresh,
+            verbose=args.verbose
+        )
+        print("Blink rate monitoring enabled")
+
     # Initialize video capture
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
@@ -217,6 +249,17 @@ def main():
             if frame_det is not None:
                 frame = frame_det
 
+            # Run additional feature detections
+            is_yawning = False
+            yawn_count = 0
+            if yawn_det is not None:
+                is_yawning, mar, yawn_count = yawn_det.detect_yawn(landmarks, t_now)
+            
+            blink_rate = 0.0
+            abnormal_blink = False
+            if blink_monitor is not None:
+                blink_rate, abnormal_blink, total_blinks = blink_monitor.update(ear, t_now)
+
             # Collect and display alert messages
             if tired:
                 alert_messages.append("TIRED!")
@@ -232,6 +275,10 @@ def main():
                 alert_messages.append("DISTRACTED!")
                 if sound:
                     sound.play(loops=0)
+            if is_yawning:
+                alert_messages.append("YAWNING!")
+            if abnormal_blink:
+                alert_messages.append("ABNORMAL BLINK RATE!")
 
             # Display alert messages at top left in red
             y_position = 30
@@ -247,6 +294,33 @@ def main():
                     cv2.LINE_AA,
                 )
                 y_position += 30
+
+            # Display additional metrics at bottom left
+            metrics_y = frame.shape[0] - 80
+            if yawn_det is not None:
+                cv2.putText(
+                    frame,
+                    f"Yawns: {yawn_count}",
+                    (10, metrics_y),
+                    POSE_FONT,
+                    POSE_FONT_SCALE,
+                    POSE_COLOR,
+                    POSE_FONT_THICKNESS,
+                    cv2.LINE_AA,
+                )
+                metrics_y += 25
+            
+            if blink_monitor is not None and blink_rate > 0:
+                cv2.putText(
+                    frame,
+                    f"Blink Rate: {blink_rate:.1f}/min",
+                    (10, metrics_y),
+                    POSE_FONT,
+                    POSE_FONT_SCALE,
+                    POSE_COLOR,
+                    POSE_FONT_THICKNESS,
+                    cv2.LINE_AA,
+                )
 
             # Display head pose angles at top right in green
             x_position_pose = frame.shape[1] - 150
@@ -286,6 +360,15 @@ def main():
                     POSE_FONT_THICKNESS,
                     cv2.LINE_AA,
                 )
+
+        # Run crash detection (works regardless of face detection)
+        crash_detected = False
+        if crash_det is not None:
+            crash_detected, motion_mag, frame = crash_det.detect_crash(frame, t_now)
+            if crash_detected:
+                alert_messages.append("CRASH DETECTED!")
+                if sound:
+                    sound.play(loops=0)
 
         e2 = cv2.getTickCount()
         proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
